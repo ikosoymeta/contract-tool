@@ -607,28 +607,10 @@
           .finally(function() { setGenerating(null); });
       }
 
-      function callAppsScript(fileUrl, filename) {
-        // Google Apps Script web apps require form submission or JSONP to work cross-origin.
-        // We use a hidden form POST that opens the result in a new window.
-        var form = document.createElement('form');
-        form.method = 'POST';
-        form.action = APPS_SCRIPT_URL;
-        form.target = '_blank';
-        var input = document.createElement('input');
-        input.type = 'hidden';
-        input.name = 'payload';
-        input.value = JSON.stringify({ url: fileUrl, filename: filename });
-        form.appendChild(input);
-        document.body.appendChild(form);
-        form.submit();
-        document.body.removeChild(form);
-      }
-
       function handleOpenInDocs(type) {
         setGenerating(type);
         addToast('Uploading to Google Drive...', 'info');
         getBlob(type).then(function(result) {
-          // Step 1: Upload .docx to Cloudflare Worker for a public URL
           var fd = new FormData();
           fd.append('file', result.blob, result.filename);
           return fetch(FILE_SERVER_URL + '/upload', { method: 'POST', body: fd })
@@ -638,8 +620,9 @@
             })
             .then(function(json) {
               if (APPS_SCRIPT_URL) {
-                // Step 2: Call Apps Script via form POST — it will create the Google Doc
-                callAppsScript(json.url, result.filename);
+                // Open Apps Script URL with query params — it fetches the file and creates a Google Doc
+                var scriptUrl = APPS_SCRIPT_URL + '?url=' + encodeURIComponent(json.url) + '&filename=' + encodeURIComponent(result.filename);
+                window.open(scriptUrl, '_blank');
                 addToast(docLabels[type] + ' is being created in Google Drive...', 'success');
               } else {
                 saveAs(result.blob, result.filename);
