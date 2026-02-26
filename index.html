@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Contract Drafter</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['"IBM Plex Sans"', 'ui-sans-serif', 'system-ui', 'sans-serif'] },
+        },
+      },
+    };
+  </script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.26.9/babel.min.js"></script>
+  <script src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
+  <script src="https://unpkg.com/file-saver@2.0.5/dist/FileSaver.min.js"></script>
+  <style>
+    body { margin: 0; font-family: 'IBM Plex Sans', sans-serif; }
+    @keyframes slide-in { from { opacity:0; transform:translateX(20px); } to { opacity:1; transform:translateX(0); } }
+    .animate-slide-in { animation: slide-in .2s ease-out; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .animate-spin { animation: spin 1s linear infinite; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    /* global React, ReactDOM, docx, saveAs */
+    const { useState, useEffect, useCallback } = React;
+    const {
+      Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
+      WidthType, AlignmentType, HeadingLevel, BorderStyle, ShadingType,
+    } = docx;
+
+    // ─── Types & Defaults ───
+    const defaultFormData = {
+      vendorLegalName: '', vendorAddress: '', vendorContactName: '', vendorEmail: '',
+      projectName: '', projectDescription: '', startDate: '', endDate: '', totalValue: 0,
+      deliverables: [], paymentMilestones: [], acceptanceCriteria: '',
+      includePSA: true, isAmendment: false, amendmentNumber: '1', originalContractDate: '',
+    };
+
+    const sections = [
+      { id: 'vendor',  label: 'Vendor Information',  description: 'Legal name, address, and contact details' },
+      { id: 'project', label: 'Project Details',     description: 'Project scope, timeline, and value' },
+      { id: 'sow',     label: 'Statement of Work',   description: 'Deliverables, milestones, and acceptance criteria' },
+      { id: 'review',  label: 'Review & Generate',   description: 'Review all data and generate documents' },
+    ];
+
+    function uuid() {
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        var r = Math.random() * 16 | 0;
+        return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+      });
+    }
+
+    // ─── Hooks ───
+    function useContractForm() {
+      const [formData, setFormDataState] = useState(function() {
+        try {
+          var r = localStorage.getItem('cd-form');
+          if (r) { return Object.assign({}, defaultFormData, JSON.parse(r)); }
+        } catch(e) { /* ignore */ }
+        return Object.assign({}, defaultFormData);
+      });
+      const [activeSection, setActiveSectionState] = useState(function() {
+        try {
+          var r = localStorage.getItem('cd-section');
+          if (r && sections.some(function(s) { return s.id === r; })) return r;
+        } catch(e) { /* ignore */ }
+        return 'vendor';
+      });
+
+      useEffect(function() { localStorage.setItem('cd-form', JSON.stringify(formData)); }, [formData]);
+      useEffect(function() { localStorage.setItem('cd-section', activeSection); }, [activeSection]);
+
+      const setFormData = useCallback(function(u) {
+        if (typeof u === 'function') setFormDataState(u);
+        else setFormDataState(function(p) { return Object.assign({}, p, u); });
+      }, []);
+      const setActiveSection = useCallback(function(s) { setActiveSectionState(s); }, []);
+      const isSectionComplete = useCallback(function(s) {
+        var d = formData;
+        switch (s) {
+          case 'vendor':  return !!(d.vendorLegalName.trim() && d.vendorAddress.trim() && d.vendorContactName.trim() && d.vendorEmail.trim());
+          case 'project': return !!(d.projectName.trim() && d.projectDescription.trim() && d.startDate && d.endDate && d.totalValue > 0);
+          case 'sow':     return d.deliverables.length > 0 && d.acceptanceCriteria.trim().length > 0;
+          case 'review':  return false;
+          default: return false;
+        }
+      }, [formData]);
+      const goToNext = useCallback(function() {
+        var i = sections.findIndex(function(s) { return s.id === activeSection; });
+        if (i < sections.length - 1) setActiveSectionState(sections[i + 1].id);
+      }, [activeSection]);
+      const goToPrev = useCallback(function() {
+        var i = sections.findIndex(function(s) { return s.id === activeSection; });
+        if (i > 0) setActiveSectionState(sections[i - 1].id);
+      }, [activeSection]);
+      const resetForm = useCallback(function() {
+        setFormDataState(Object.assign({}, defaultFormData));
+        setActiveSectionState('vendor');
+        localStorage.removeItem('cd-form');
+        localStorage.removeItem('cd-section');
+      }, []);
+      return { formData: formData, setFormData: setFormData, activeSection: activeSection, setActiveSection: setActiveSection, isSectionComplete: isSectionComplete, goToNext: goToNext, goToPrev: goToPrev, resetForm: resetForm };
+    }
+
+    function useToast() {
+      const [toasts, setToasts] = useState([]);
+      const addToast = useCallback(function(message, type) {
+        type = type || 'info';
+        var id = String(Date.now()) + String(Math.random());
+        setToasts(function(p) { return p.concat([{ id: id, message: message, type: type }]); });
+        setTimeout(function() { setToasts(function(p) { return p.filter(function(t) { return t.id !== id; }); }); }, 4000);
+      }, []);
+      const removeToast = useCallback(function(id) { setToasts(function(p) { return p.filter(function(t) { return t.id !== id; }); }); }, []);
+      return { toasts: toasts, addToast: addToast, removeToast: removeToast };
+    }
+
+    // ─── Document Generation ───
+    function fmtDate(d) {
+      if (!d) return '___________';
+      return new Date(d).toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
+    }
+    function fmtCurrency(n) {
+      return new Intl.NumberFormat('en-US', { style:'currency', currency:'USD' }).format(n);
+    }
+
+    var tblBorder = {
+      top:    { style: BorderStyle.SINGLE, size: 1, color: 'CCCCCC' },
+      bottom: { style: BorderStyle.SINGLE, size: 1, color: 'CCCCCC' },
+      left:   { style: BorderStyle.SINGLE, size: 1, color: 'CCCCCC' },
+      right:  { style: BorderStyle.SINGLE, size: 1, color: 'CCCCCC' },
+    };
+
+    function hdr(t, lvl) {
+      lvl = lvl || HeadingLevel.HEADING_1;
+      return new Paragraph({ heading: lvl, spacing: { before: 240, after: 120 }, children: [new TextRun({ text: t, bold: true })] });
+    }
+    function bodyP(t, opts) {
+      opts = opts || {};
+      return new Paragraph({ spacing: { after: opts.spacing || 120 }, children: [new TextRun({ text: t, bold: opts.bold, size: 22, font: 'IBM Plex Sans' })] });
+    }
+    function lv(l, v) {
+      return new Paragraph({ spacing: { after: 80 }, children: [
+        new TextRun({ text: l + ': ', bold: true, size: 22, font: 'IBM Plex Sans' }),
+        new TextRun({ text: v, size: 22, font: 'IBM Plex Sans' })
+      ]});
+    }
+    function hCell(t) {
+      return new TableCell({ borders: tblBorder, shading: { type: ShadingType.SOLID, color: 'E8EDF2', fill: 'E8EDF2' }, children: [new Paragraph({ children: [new TextRun({ text: t, bold: true, size: 20, font: 'IBM Plex Sans' })] })] });
+    }
+    function dCell(t) {
+      return new TableCell({ borders: tblBorder, children: [new Paragraph({ children: [new TextRun({ text: t, size: 20, font: 'IBM Plex Sans' })] })] });
+    }
+
+    function generatePSA(data) {
+      var title = data.isAmendment ? 'AMENDMENT ' + data.amendmentNumber + ' TO PROFESSIONAL SERVICES AGREEMENT' : 'PROFESSIONAL SERVICES AGREEMENT';
+      var ch = [
+        hdr(title),
+        bodyP('This Professional Services Agreement ("Agreement") is entered into as of ' + fmtDate(data.startDate) + ' by and between:'),
+        bodyP(data.vendorLegalName + ', with offices at ' + data.vendorAddress + ' ("Vendor"),', { spacing: 60 }),
+        bodyP('and'),
+        bodyP('the Client ("Client").', { spacing: 200 }),
+        hdr('1. ENGAGEMENT', HeadingLevel.HEADING_2),
+        bodyP('Client engages Vendor to provide professional services as described in the Statement of Work attached hereto or as separately executed ("SOW"). The SOW is incorporated into this Agreement by reference.'),
+        hdr('2. TERM', HeadingLevel.HEADING_2),
+        bodyP('This Agreement is effective from ' + fmtDate(data.startDate) + ' through ' + fmtDate(data.endDate) + ', unless earlier terminated in accordance with the terms herein.'),
+        hdr('3. COMPENSATION', HeadingLevel.HEADING_2),
+        bodyP('Client shall pay Vendor a total amount not to exceed ' + fmtCurrency(data.totalValue) + ' for services rendered under this Agreement, payable according to the payment schedule outlined in the SOW.'),
+        hdr('4. INDEPENDENT CONTRACTOR', HeadingLevel.HEADING_2),
+        bodyP('Vendor is an independent contractor and is not an employee, agent, or partner of Client. Vendor shall be solely responsible for all taxes, withholdings, and obligations arising from compensation paid hereunder.'),
+        hdr('5. CONFIDENTIALITY', HeadingLevel.HEADING_2),
+        bodyP('Each party agrees to hold in confidence all non-public information received from the other party during the term of this Agreement. This obligation survives termination of this Agreement for a period of three (3) years.'),
+        hdr('6. INTELLECTUAL PROPERTY', HeadingLevel.HEADING_2),
+        bodyP('All work product created by Vendor in performance of this Agreement shall be considered "work made for hire" and shall be the exclusive property of Client. To the extent any work product does not qualify as work made for hire, Vendor hereby assigns all rights, title, and interest therein to Client.'),
+        hdr('7. WARRANTIES', HeadingLevel.HEADING_2),
+        bodyP('Vendor warrants that (a) it has the authority to enter into this Agreement; (b) the services will be performed in a professional and workmanlike manner; and (c) the deliverables will conform to the specifications set forth in the SOW.'),
+        hdr('8. LIMITATION OF LIABILITY', HeadingLevel.HEADING_2),
+        bodyP("Neither party shall be liable for any indirect, incidental, special, or consequential damages arising from this Agreement. Each party's total aggregate liability shall not exceed the total amount paid or payable under this Agreement."),
+        hdr('9. TERMINATION', HeadingLevel.HEADING_2),
+        bodyP("Either party may terminate this Agreement upon thirty (30) days' written notice. In the event of a material breach, the non-breaching party may terminate immediately upon written notice if such breach remains uncured for fifteen (15) days after receipt of notice."),
+        hdr('10. GENERAL PROVISIONS', HeadingLevel.HEADING_2),
+        bodyP('This Agreement, together with all SOWs, constitutes the entire agreement between the parties. It may not be modified except in writing signed by both parties. This Agreement shall be governed by the laws of the State of Delaware.'),
+        new Paragraph({ spacing: { before: 400 } }),
+        bodyP('IN WITNESS WHEREOF, the parties have executed this Agreement as of the date first written above.'),
+        new Paragraph({ spacing: { before: 300 } }),
+        bodyP('CLIENT:', { bold: true }), bodyP('Signature: _____________________________'), bodyP('Name: _____________________________'), bodyP('Title: _____________________________'), bodyP('Date: _____________________________', { spacing: 200 }),
+        bodyP('VENDOR:', { bold: true }), bodyP('Company: ' + data.vendorLegalName), bodyP('Signature: _____________________________'), bodyP('Name: ' + data.vendorContactName), bodyP('Title: _____________________________'), bodyP('Date: _____________________________'),
+      ];
+      return new Document({ styles: { default: { document: { run: { font: 'IBM Plex Sans', size: 22 } } } }, sections: [{ children: ch }] });
+    }
+
+    function generateSOW(data) {
+      var title = data.isAmendment ? 'AMENDMENT ' + data.amendmentNumber + ' \u2014 STATEMENT OF WORK' : 'STATEMENT OF WORK';
+      var dRows = data.deliverables.map(function(d) { return new TableRow({ children: [dCell(d.name), dCell(d.description), dCell(fmtDate(d.dueDate))] }); });
+      var mRows = data.paymentMilestones.map(function(m) { return new TableRow({ children: [dCell(m.name), dCell(fmtCurrency(m.amount)), dCell(fmtDate(m.dueDate))] }); });
+      var ch = [
+        hdr(title),
+      ];
+      if (data.isAmendment) {
+        ch.push(bodyP('This Amendment ' + data.amendmentNumber + ' ("Amendment") to the Statement of Work dated ' + fmtDate(data.originalContractDate) + ' is entered into as of ' + fmtDate(data.startDate) + '.'));
+      }
+      ch.push(
+        hdr('1. PROJECT OVERVIEW', HeadingLevel.HEADING_2),
+        lv('Project Name', data.projectName), lv('Vendor', data.vendorLegalName),
+        lv('Period of Performance', fmtDate(data.startDate) + ' \u2014 ' + fmtDate(data.endDate)),
+        lv('Total Value', fmtCurrency(data.totalValue)),
+        new Paragraph({ spacing: { before: 120 } }), bodyP(data.projectDescription),
+        hdr('2. DELIVERABLES', HeadingLevel.HEADING_2)
+      );
+      if (data.deliverables.length > 0) {
+        ch.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [new TableRow({ children: [hCell('Deliverable'), hCell('Description'), hCell('Due Date')] })].concat(dRows) }));
+      } else {
+        ch.push(bodyP('No deliverables specified.'));
+      }
+      ch.push(hdr('3. PAYMENT MILESTONES', HeadingLevel.HEADING_2));
+      if (data.paymentMilestones.length > 0) {
+        ch.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [new TableRow({ children: [hCell('Milestone'), hCell('Amount'), hCell('Due Date')] })].concat(mRows) }));
+      } else {
+        ch.push(bodyP('No payment milestones specified.'));
+      }
+      ch.push(
+        hdr('4. ACCEPTANCE CRITERIA', HeadingLevel.HEADING_2),
+        bodyP(data.acceptanceCriteria || 'No acceptance criteria specified.'),
+        hdr('5. ASSUMPTIONS AND CONSTRAINTS', HeadingLevel.HEADING_2),
+        bodyP('The following assumptions apply to this engagement:'),
+        bodyP('\u2022 Client will provide timely access to required systems, data, and stakeholders.'),
+        bodyP('\u2022 Vendor will assign qualified personnel to perform the services.'),
+        bodyP('\u2022 Any changes to scope will be documented in a written change order.'),
+        new Paragraph({ spacing: { before: 400 } }),
+        bodyP('ACCEPTED AND AGREED:', { bold: true }),
+        new Paragraph({ spacing: { before: 200 } }),
+        new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [new TableRow({ children: [
+          new TableCell({ borders: tblBorder, width: { size: 50, type: WidthType.PERCENTAGE }, children: [
+            new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: 'CLIENT', bold: true, size: 22 })] }),
+            bodyP(''), bodyP('Signature: ____________________'), bodyP('Name: ____________________'), bodyP('Date: ____________________')
+          ]}),
+          new TableCell({ borders: tblBorder, width: { size: 50, type: WidthType.PERCENTAGE }, children: [
+            new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: 'VENDOR', bold: true, size: 22 })] }),
+            bodyP(''), bodyP('Signature: ____________________'), bodyP('Name: ' + data.vendorContactName), bodyP('Date: ____________________')
+          ]})
+        ]})] })
+      );
+      return new Document({ styles: { default: { document: { run: { font: 'IBM Plex Sans', size: 22 } } } }, sections: [{ children: ch }] });
+    }
+
+    function generateFormSummary(data) {
+      var dRows = data.deliverables.map(function(d) { return new TableRow({ children: [dCell(d.name), dCell(d.description), dCell(fmtDate(d.dueDate))] }); });
+      var mRows = data.paymentMilestones.map(function(m) { return new TableRow({ children: [dCell(m.name), dCell(fmtCurrency(m.amount)), dCell(fmtDate(m.dueDate))] }); });
+      var ch = [
+        hdr('CONTRACT FORM SUMMARY'),
+        bodyP('Generated on ' + new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })),
+        bodyP('Document Type: ' + (data.isAmendment ? 'Amendment ' + data.amendmentNumber : 'New Contract')),
+        hdr('VENDOR INFORMATION', HeadingLevel.HEADING_2),
+        lv('Legal Name', data.vendorLegalName), lv('Address', data.vendorAddress), lv('Contact', data.vendorContactName), lv('Email', data.vendorEmail),
+        hdr('PROJECT DETAILS', HeadingLevel.HEADING_2),
+        lv('Project Name', data.projectName), lv('Start Date', fmtDate(data.startDate)), lv('End Date', fmtDate(data.endDate)), lv('Total Value', fmtCurrency(data.totalValue)), bodyP(data.projectDescription),
+        hdr('DELIVERABLES', HeadingLevel.HEADING_2),
+      ];
+      if (data.deliverables.length > 0) {
+        ch.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [new TableRow({ children: [hCell('Deliverable'), hCell('Description'), hCell('Due Date')] })].concat(dRows) }));
+      } else { ch.push(bodyP('None specified.')); }
+      ch.push(hdr('PAYMENT MILESTONES', HeadingLevel.HEADING_2));
+      if (data.paymentMilestones.length > 0) {
+        ch.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [new TableRow({ children: [hCell('Milestone'), hCell('Amount'), hCell('Due Date')] })].concat(mRows) }));
+      } else { ch.push(bodyP('None specified.')); }
+      ch.push(
+        hdr('ACCEPTANCE CRITERIA', HeadingLevel.HEADING_2),
+        bodyP(data.acceptanceCriteria || 'None specified.'),
+        hdr('CONTRACT OPTIONS', HeadingLevel.HEADING_2),
+        lv('Include PSA', data.includePSA ? 'Yes' : 'No'),
+        lv('Amendment Mode', data.isAmendment ? 'Yes' : 'No')
+      );
+      if (data.isAmendment) {
+        ch.push(lv('Amendment Number', data.amendmentNumber));
+        ch.push(lv('Original Contract Date', fmtDate(data.originalContractDate)));
+      }
+      return new Document({ styles: { default: { document: { run: { font: 'IBM Plex Sans', size: 22 } } } }, sections: [{ children: ch }] });
+    }
+
+    function docToBlob(doc) { return Packer.toBlob(doc); }
+
+    // ─── Components ───
+
+    // Cloudflare Worker URL — update this after deploying
+    var FILE_SERVER_URL = 'https://contract-drafter-files.ikosoy.workers.dev';
+
+    var GOOGLE_DRIVE_FOLDER = 'https://drive.google.com/drive/u/0/folders/0AFszIqpbNJEXUk9PVA';
+    var INP = "w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm text-gray-800 placeholder:text-gray-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 focus:outline-none transition-colors";
+
+    function ToastContainer({ toasts, onRemove }) {
+      var bg = { success: 'bg-emerald-600', error: 'bg-red-600', info: 'bg-blue-600' };
+      if (!toasts.length) return null;
+      return (
+        <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-3">
+          {toasts.map(function(t) {
+            return (
+              <div key={t.id} className={bg[t.type] + " text-white px-5 py-3 rounded-lg shadow-lg flex items-center gap-3 min-w-[280px] animate-slide-in"}>
+                <span className="flex-1 text-sm">{t.message}</span>
+                <button onClick={function() { onRemove(t.id); }} className="text-white/70 hover:text-white text-lg leading-none">&times;</button>
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
+    function Sidebar({ activeSection, onSectionClick, isSectionComplete }) {
+      return (
+        <aside className="w-72 bg-white border-r border-gray-200 min-h-screen flex flex-col flex-shrink-0">
+          <div className="px-6 py-6 border-b border-gray-200">
+            <h1 className="text-xl font-semibold text-gray-900">Contract Drafter</h1>
+            <p className="text-xs text-gray-500 mt-1">Professional Services Contracts</p>
+          </div>
+          <nav className="flex-1 py-4">
+            {sections.map(function(s, i) {
+              var active = activeSection === s.id;
+              var complete = isSectionComplete(s.id);
+              return (
+                <button key={s.id} onClick={function() { onSectionClick(s.id); }}
+                  className={"w-full text-left px-6 py-3 flex items-start gap-3 transition-colors " + (active ? 'bg-blue-50 border-r-2 border-blue-600' : 'hover:bg-gray-50')}>
+                  <span className={"mt-0.5 w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium flex-shrink-0 " + (complete ? 'bg-emerald-100 text-emerald-700' : active ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-500')}>
+                    {complete ? <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"/></svg> : i + 1}
+                  </span>
+                  <div>
+                    <div className={"text-sm font-medium " + (active ? 'text-blue-700' : 'text-gray-700')}>{s.label}</div>
+                    <div className="text-xs text-gray-400 mt-0.5">{s.description}</div>
+                  </div>
+                </button>
+              );
+            })}
+          </nav>
+          <div className="px-6 py-4 border-t border-gray-200 text-xs text-gray-400">Data saved locally in your browser</div>
+        </aside>
+      );
+    }
+
+    function Field({ label, required, children }) {
+      return (
+        <label className="block">
+          <span className="text-sm font-medium text-gray-700">{label}{required && <span className="text-red-500 ml-0.5">*</span>}</span>
+          <div className="mt-1.5">{children}</div>
+        </label>
+      );
+    }
+
+    function VendorSection({ data, onChange, onNext }) {
+      return (
+        <div>
+          <h2 className="text-lg font-semibold text-gray-900 mb-1">Vendor Information</h2>
+          <p className="text-sm text-gray-500 mb-6">Enter the vendor's legal details and primary contact.</p>
+          <div className="space-y-5">
+            <Field label="Vendor Legal Name" required>
+              <input type="text" value={data.vendorLegalName} onChange={function(e) { onChange({ vendorLegalName: e.target.value }); }} placeholder="e.g. Acme Consulting LLC" className={INP} />
+            </Field>
+            <Field label="Address" required>
+              <textarea value={data.vendorAddress} onChange={function(e) { onChange({ vendorAddress: e.target.value }); }} placeholder="Full mailing address" rows={3} className={INP + " resize-none"} />
+            </Field>
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="Contact Name" required>
+                <input type="text" value={data.vendorContactName} onChange={function(e) { onChange({ vendorContactName: e.target.value }); }} placeholder="Primary contact" className={INP} />
+              </Field>
+              <Field label="Email" required>
+                <input type="email" value={data.vendorEmail} onChange={function(e) { onChange({ vendorEmail: e.target.value }); }} placeholder="contact@vendor.com" className={INP} />
+              </Field>
+            </div>
+          </div>
+          <div className="mt-8 flex justify-end">
+            <button onClick={onNext} className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-blue-700 active:bg-blue-800 transition-colors">Next: Project Details</button>
+          </div>
+        </div>
+      );
+    }
+
+    function ProjectSection({ data, onChange, onNext, onPrev }) {
+      return (
+        <div>
+          <h2 className="text-lg font-semibold text-gray-900 mb-1">Project Details</h2>
+          <p className="text-sm text-gray-500 mb-6">Define the project scope, timeline, and total value.</p>
+          <div className="space-y-5">
+            <Field label="Project Name" required>
+              <input type="text" value={data.projectName} onChange={function(e) { onChange({ projectName: e.target.value }); }} placeholder="e.g. Website Redesign Phase 2" className={INP} />
+            </Field>
+            <Field label="Project Description" required>
+              <textarea value={data.projectDescription} onChange={function(e) { onChange({ projectDescription: e.target.value }); }} placeholder="Describe the project scope, objectives, and expected outcomes..." rows={4} className={INP + " resize-none"} />
+            </Field>
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="Start Date" required><input type="date" value={data.startDate} onChange={function(e) { onChange({ startDate: e.target.value }); }} className={INP} /></Field>
+              <Field label="End Date" required><input type="date" value={data.endDate} onChange={function(e) { onChange({ endDate: e.target.value }); }} className={INP} /></Field>
+            </div>
+            <Field label="Total Contract Value (USD)" required>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">$</span>
+                <input type="number" value={data.totalValue || ''} onChange={function(e) { onChange({ totalValue: Number(e.target.value) }); }} placeholder="0.00" min={0} step={0.01} className={INP + " pl-7"} />
+              </div>
+            </Field>
+          </div>
+          <div className="mt-8 flex justify-between">
+            <button onClick={onPrev} className="inline-flex items-center rounded-lg border border-gray-300 bg-white px-5 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">Back</button>
+            <button onClick={onNext} className="inline-flex items-center rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-blue-700 transition-colors">Next: Statement of Work</button>
+          </div>
+        </div>
+      );
+    }
+
+    function SOWSection({ data, onChange, onNext, onPrev }) {
+      function addD() { onChange(function(p) { return Object.assign({}, p, { deliverables: p.deliverables.concat([{ id: uuid(), name: '', description: '', dueDate: '' }]) }); }); }
+      function updD(id, f, v) { onChange(function(p) { return Object.assign({}, p, { deliverables: p.deliverables.map(function(d) { if (d.id === id) { var u = Object.assign({}, d); u[f] = v; return u; } return d; }) }); }); }
+      function rmD(id) { onChange(function(p) { return Object.assign({}, p, { deliverables: p.deliverables.filter(function(d) { return d.id !== id; }), paymentMilestones: p.paymentMilestones.filter(function(m) { return m.deliverableId !== id; }) }); }); }
+      function addM() { onChange(function(p) { return Object.assign({}, p, { paymentMilestones: p.paymentMilestones.concat([{ id: uuid(), name: '', amount: 0, dueDate: '', deliverableId: '' }]) }); }); }
+      function updM(id, f, v) { onChange(function(p) { return Object.assign({}, p, { paymentMilestones: p.paymentMilestones.map(function(m) { if (m.id === id) { var u = Object.assign({}, m); u[f] = v; return u; } return m; }) }); }); }
+      function rmM(id) { onChange(function(p) { return Object.assign({}, p, { paymentMilestones: p.paymentMilestones.filter(function(m) { return m.id !== id; }) }); }); }
+
+      return (
+        <div>
+          <h2 className="text-lg font-semibold text-gray-900 mb-1">Statement of Work</h2>
+          <p className="text-sm text-gray-500 mb-6">Define deliverables, payment milestones, and acceptance criteria.</p>
+
+          <div className="mb-8">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold text-gray-800">Deliverables</h3>
+              <button onClick={addD} className="inline-flex items-center rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 transition-colors">+ Add Deliverable</button>
+            </div>
+            {data.deliverables.length === 0 ? (
+              <div className="border border-dashed border-gray-300 rounded-lg p-6 text-center text-sm text-gray-400">No deliverables yet. Click "Add Deliverable" to get started.</div>
+            ) : (
+              <div className="space-y-3">
+                {data.deliverables.map(function(d, i) {
+                  return (
+                    <div key={d.id} className="border border-gray-200 rounded-lg p-4 bg-gray-50/50">
+                      <div className="flex items-center justify-between mb-3">
+                        <span className="text-xs font-medium text-gray-500">Deliverable {i + 1}</span>
+                        <button onClick={function() { rmD(d.id); }} className="text-xs text-red-500 hover:text-red-700">Remove</button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <input type="text" value={d.name} onChange={function(e) { updD(d.id, 'name', e.target.value); }} placeholder="Deliverable name" className={INP + " text-sm"} />
+                        <input type="date" value={d.dueDate} onChange={function(e) { updD(d.id, 'dueDate', e.target.value); }} className={INP + " text-sm"} />
+                      </div>
+                      <textarea value={d.description} onChange={function(e) { updD(d.id, 'description', e.target.value); }} placeholder="Description of this deliverable..." rows={2} className={INP + " text-sm mt-3 resize-none"} />
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div className="mb-8">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold text-gray-800">Payment Milestones</h3>
+              <button onClick={addM} className="inline-flex items-center rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 transition-colors">+ Add Milestone</button>
+            </div>
+            {data.paymentMilestones.length === 0 ? (
+              <div className="border border-dashed border-gray-300 rounded-lg p-6 text-center text-sm text-gray-400">No milestones yet. Click "Add Milestone" to define payment schedule.</div>
+            ) : (
+              <div className="space-y-3">
+                {data.paymentMilestones.map(function(m, i) {
+                  return (
+                    <div key={m.id} className="border border-gray-200 rounded-lg p-4 bg-gray-50/50">
+                      <div className="flex items-center justify-between mb-3">
+                        <span className="text-xs font-medium text-gray-500">Milestone {i + 1}</span>
+                        <button onClick={function() { rmM(m.id); }} className="text-xs text-red-500 hover:text-red-700">Remove</button>
+                      </div>
+                      <div className="grid grid-cols-3 gap-3">
+                        <input type="text" value={m.name} onChange={function(e) { updM(m.id, 'name', e.target.value); }} placeholder="Milestone name" className={INP + " text-sm"} />
+                        <div className="relative">
+                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs">$</span>
+                          <input type="number" value={m.amount || ''} onChange={function(e) { updM(m.id, 'amount', Number(e.target.value)); }} placeholder="0.00" min={0} step={0.01} className={INP + " text-sm pl-7"} />
+                        </div>
+                        <input type="date" value={m.dueDate} onChange={function(e) { updM(m.id, 'dueDate', e.target.value); }} className={INP + " text-sm"} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div className="mb-8">
+            <h3 className="text-sm font-semibold text-gray-800 mb-3">Acceptance Criteria</h3>
+            <textarea value={data.acceptanceCriteria} onChange={function(e) { onChange({ acceptanceCriteria: e.target.value }); }} placeholder="Define the criteria for accepting deliverables..." rows={5} className={INP + " resize-none"} />
+          </div>
+
+          <div className="mt-8 flex justify-between">
+            <button onClick={onPrev} className="inline-flex items-center rounded-lg border border-gray-300 bg-white px-5 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">Back</button>
+            <button onClick={onNext} className="inline-flex items-center rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-blue-700 transition-colors">Next: Review &amp; Generate</button>
+          </div>
+        </div>
+      );
+    }
+
+    function ReviewSection({ data, onChange, onPrev, onReset, addToast }) {
+      const [generating, setGenerating] = useState(null);
+      var docLabels = { psa: 'Professional Services Agreement', sow: 'Statement of Work', summary: 'Form Summary' };
+
+      function fD(d) { return d ? new Date(d).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : '--'; }
+      function fC(n) { return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n); }
+
+      function getBlob(type) {
+        var prefix = (data.projectName || 'contract').replace(/[^a-zA-Z0-9]/g, '_');
+        var doc, filename;
+        if (type === 'psa') { doc = generatePSA(data); filename = prefix + '_PSA.docx'; }
+        else if (type === 'sow') { doc = generateSOW(data); filename = prefix + '_SOW.docx'; }
+        else { doc = generateFormSummary(data); filename = prefix + '_Summary.docx'; }
+        return docToBlob(doc).then(function(blob) { return { blob: blob, filename: filename }; });
+      }
+
+      function handleDownload(type) {
+        setGenerating(type);
+        getBlob(type).then(function(result) {
+          saveAs(result.blob, result.filename);
+          addToast(docLabels[type] + ' downloaded', 'success');
+        }).catch(function(e) {
+          addToast('Failed to generate ' + docLabels[type], 'error');
+          console.error(e);
+        }).finally(function() { setGenerating(null); });
+      }
+
+      function handleDownloadAll() {
+        setGenerating('all');
+        var types = data.includePSA ? ['psa', 'sow', 'summary'] : ['sow', 'summary'];
+        var chain = Promise.resolve();
+        types.forEach(function(t) {
+          chain = chain.then(function() {
+            return getBlob(t).then(function(r) { saveAs(r.blob, r.filename); });
+          });
+        });
+        chain.then(function() { addToast('All documents downloaded', 'success'); })
+          .catch(function(e) { addToast('Failed to generate documents', 'error'); console.error(e); })
+          .finally(function() { setGenerating(null); });
+      }
+
+      function handleOpenInDocs(type) {
+        setGenerating(type);
+        addToast('Uploading to open in Google Docs...', 'info');
+        getBlob(type).then(function(result) {
+          var fd = new FormData();
+          fd.append('file', result.blob, result.filename);
+          return fetch(FILE_SERVER_URL + '/upload', { method: 'POST', body: fd })
+            .then(function(res) {
+              if (!res.ok) throw new Error('Upload server unavailable');
+              return res.json();
+            })
+            .then(function(json) {
+              window.open('https://docs.google.com/document/create?url=' + encodeURIComponent(json.url), '_blank');
+              addToast(docLabels[type] + ' opened in Google Docs', 'success');
+            })
+            .catch(function() {
+              saveAs(result.blob, result.filename);
+              window.open(GOOGLE_DRIVE_FOLDER, '_blank');
+              addToast('File downloaded. Your Google Drive folder is now open \u2014 drag the downloaded file into it, then right-click > "Open with" > Google Docs.', 'info');
+            });
+        }).catch(function(e) {
+          addToast('Failed to generate document', 'error');
+          console.error(e);
+        }).finally(function() { setGenerating(null); });
+      }
+
+      var docTypes = data.includePSA ? ['psa', 'sow', 'summary'] : ['sow', 'summary'];
+
+      return (
+        <div>
+          <h2 className="text-lg font-semibold text-gray-900 mb-1">Review &amp; Generate</h2>
+          <p className="text-sm text-gray-500 mb-6">Review your contract data and generate documents.</p>
+
+          <div className="space-y-4 mb-8">
+            <SummaryCard title="Vendor Information">
+              <SRow l="Legal Name" v={data.vendorLegalName} /><SRow l="Address" v={data.vendorAddress} /><SRow l="Contact" v={data.vendorContactName} /><SRow l="Email" v={data.vendorEmail} />
+            </SummaryCard>
+            <SummaryCard title="Project Details">
+              <SRow l="Project Name" v={data.projectName} /><SRow l="Description" v={data.projectDescription} /><SRow l="Period" v={fD(data.startDate) + ' \u2014 ' + fD(data.endDate)} /><SRow l="Total Value" v={fC(data.totalValue)} />
+            </SummaryCard>
+            <SummaryCard title="Statement of Work">
+              <div className="text-sm text-gray-600 mb-2"><span className="font-medium">{data.deliverables.length}</span> deliverable(s), <span className="font-medium">{data.paymentMilestones.length}</span> payment milestone(s)</div>
+              {data.deliverables.length > 0 && <div className="mt-2"><div className="text-xs font-medium text-gray-500 uppercase mb-1">Deliverables</div><ul className="text-sm text-gray-600 space-y-1">{data.deliverables.map(function(d) { return <li key={d.id} className="flex justify-between"><span>{d.name || '(unnamed)'}</span><span className="text-gray-400">{fD(d.dueDate)}</span></li>; })}</ul></div>}
+              {data.paymentMilestones.length > 0 && <div className="mt-3"><div className="text-xs font-medium text-gray-500 uppercase mb-1">Payment Milestones</div><ul className="text-sm text-gray-600 space-y-1">{data.paymentMilestones.map(function(m) { return <li key={m.id} className="flex justify-between"><span>{m.name || '(unnamed)'}</span><span className="text-gray-400">{fC(m.amount)}</span></li>; })}</ul></div>}
+              {data.acceptanceCriteria && <div className="mt-3"><div className="text-xs font-medium text-gray-500 uppercase mb-1">Acceptance Criteria</div><p className="text-sm text-gray-600 whitespace-pre-wrap">{data.acceptanceCriteria}</p></div>}
+            </SummaryCard>
+          </div>
+
+          <div className="border-t border-gray-200 pt-6 mb-6">
+            <h3 className="text-sm font-semibold text-gray-800 mb-4">Contract Options</h3>
+            <div className="space-y-4">
+              <div className="border border-gray-200 rounded-lg p-4">
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <input type="checkbox" checked={data.includePSA} onChange={function(e) { onChange({ includePSA: e.target.checked }); }} className="mt-1 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 accent-blue-600" />
+                  <div>
+                    <div className="text-sm font-medium text-gray-800">Include Professional Services Agreement (PSA)</div>
+                    <div className="text-xs text-gray-500 mt-1">Generate a separate PSA document with standard terms and conditions</div>
+                  </div>
+                </label>
+              </div>
+              <div className="border border-gray-200 rounded-lg p-4">
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <input type="checkbox" checked={data.isAmendment} onChange={function(e) { onChange({ isAmendment: e.target.checked }); }} className="mt-1 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 accent-blue-600" />
+                  <div>
+                    <div className="text-sm font-medium text-gray-800">Create an Amendment</div>
+                    <div className="text-xs text-gray-500 mt-1">Generate documents as an amendment to an existing contract</div>
+                  </div>
+                </label>
+                {data.isAmendment && (
+                  <div className="mt-4 ml-7 space-y-3 border-t border-gray-100 pt-3">
+                    <Field label="Amendment Number"><input type="text" value={data.amendmentNumber} onChange={function(e) { onChange({ amendmentNumber: e.target.value }); }} placeholder="e.g. 1" className={INP + " mt-1.5"} /></Field>
+                    <Field label="Original Contract Date"><input type="date" value={data.originalContractDate} onChange={function(e) { onChange({ originalContractDate: e.target.value }); }} className={INP + " mt-1.5"} /></Field>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="border-t border-gray-200 pt-6">
+            <h3 className="text-sm font-semibold text-gray-800 mb-4">Generate Documents</h3>
+            {generating && (
+              <div className="mb-4 flex items-center gap-2 text-sm text-blue-600">
+                <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/></svg>
+                Generating...
+              </div>
+            )}
+            <div className="space-y-3">
+              {docTypes.map(function(type) {
+                return (
+                  <div key={type} className="flex items-center justify-between border border-gray-200 rounded-lg p-4">
+                    <div><div className="text-sm font-medium text-gray-800">{docLabels[type]}</div><div className="text-xs text-gray-400">.docx format</div></div>
+                    <div className="flex items-center gap-2">
+                      <button onClick={function() { handleDownload(type); }} disabled={!!generating} className="inline-flex items-center rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-50">
+                        <svg className="w-3.5 h-3.5 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                        Download
+                      </button>
+                      <button onClick={function() { handleOpenInDocs(type); }} disabled={!!generating} className="inline-flex items-center rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 transition-colors disabled:opacity-50">
+                        <svg className="w-3.5 h-3.5 mr-1" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6zm4 18H6V4h7v5h5v11zM8 13h8v2H8v-2zm0 4h8v2H8v-2zm0-8h3v2H8V9z"/></svg>
+                        Save to Google Drive
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="mt-4">
+              <button onClick={handleDownloadAll} disabled={!!generating} className="w-full inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-5 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-50">
+                {generating === 'all' ? 'Generating...' : 'Download All Documents'}
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-8 flex justify-between items-center border-t border-gray-200 pt-6">
+            <button onClick={onPrev} className="inline-flex items-center rounded-lg border border-gray-300 bg-white px-5 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">Back</button>
+            <button onClick={onReset} className="text-sm text-red-500 hover:text-red-700">Reset Form</button>
+          </div>
+        </div>
+      );
+    }
+
+    function SummaryCard({ title, children }) {
+      return <div className="border border-gray-200 rounded-lg p-4"><div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">{title}</div>{children}</div>;
+    }
+    function SRow({ l, v }) {
+      return <div className="flex justify-between text-sm py-1"><span className="text-gray-500">{l}</span><span className="text-gray-800 font-medium text-right max-w-[60%] break-words">{v || '--'}</span></div>;
+    }
+
+    // ─── App ───
+    function App() {
+      var form = useContractForm();
+      var toast = useToast();
+
+      function renderSection() {
+        switch (form.activeSection) {
+          case 'vendor':  return <VendorSection data={form.formData} onChange={form.setFormData} onNext={form.goToNext} />;
+          case 'project': return <ProjectSection data={form.formData} onChange={form.setFormData} onNext={form.goToNext} onPrev={form.goToPrev} />;
+          case 'sow':     return <SOWSection data={form.formData} onChange={form.setFormData} onNext={form.goToNext} onPrev={form.goToPrev} />;
+          case 'review':  return <ReviewSection data={form.formData} onChange={form.setFormData} onPrev={form.goToPrev} onReset={form.resetForm} addToast={toast.addToast} />;
+          default: return null;
+        }
+      }
+
+      return (
+        <div className="flex min-h-screen bg-gray-50 font-sans">
+          <Sidebar activeSection={form.activeSection} onSectionClick={form.setActiveSection} isSectionComplete={form.isSectionComplete} />
+          <main className="flex-1 p-8 max-w-3xl">
+            <div className="bg-white border border-gray-200 rounded-xl p-8 shadow-sm">{renderSection()}</div>
+          </main>
+          <ToastContainer toasts={toast.toasts} onRemove={toast.removeToast} />
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
