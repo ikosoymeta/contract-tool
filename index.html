@@ -296,7 +296,7 @@
     // Cloudflare Worker URL — update this after deploying
     var FILE_SERVER_URL = 'https://contract-drafter-files.ikosoy.workers.dev';
 
-    var GOOGLE_DRIVE_FOLDER = 'https://drive.google.com/drive/u/0/folders/0AFszIqpbNJEXUk9PVA';
+    var GOOGLE_DRIVE_FOLDER = 'https://drive.google.com/drive/folders/1dcmur1QVcbaPAR0CneVo6DlaA6bq_M6Y';
     var INP = "w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm text-gray-800 placeholder:text-gray-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 focus:outline-none transition-colors";
 
     function ToastContainer({ toasts, onRemove }) {
@@ -521,11 +521,14 @@
       function fC(n) { return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n); }
 
       function getBlob(type) {
-        var prefix = (data.projectName || 'contract').replace(/[^a-zA-Z0-9]/g, '_');
-        var doc, filename;
-        if (type === 'psa') { doc = generatePSA(data); filename = prefix + '_PSA.docx'; }
-        else if (type === 'sow') { doc = generateSOW(data); filename = prefix + '_SOW.docx'; }
-        else { doc = generateFormSummary(data); filename = prefix + '_Summary.docx'; }
+        var projectName = (data.projectName || 'Contract').trim();
+        var today = new Date();
+        var dateStr = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
+        var doc, docType;
+        if (type === 'psa') { doc = generatePSA(data); docType = 'PSA'; }
+        else if (type === 'sow') { doc = generateSOW(data); docType = 'SOW'; }
+        else { doc = generateFormSummary(data); docType = 'Form Summary'; }
+        var filename = projectName + ' - ' + docType + ' - ' + dateStr + '.docx';
         return docToBlob(doc).then(function(blob) { return { blob: blob, filename: filename }; });
       }
 
