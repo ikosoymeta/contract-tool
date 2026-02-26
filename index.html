@@ -587,24 +587,12 @@
 
       function handleOpenInDocs(type) {
         setGenerating(type);
-        addToast('Uploading to open in Google Docs...', 'info');
         getBlob(type).then(function(result) {
-          var fd = new FormData();
-          fd.append('file', result.blob, result.filename);
-          return fetch(FILE_SERVER_URL + '/upload', { method: 'POST', body: fd })
-            .then(function(res) {
-              if (!res.ok) throw new Error('Upload server unavailable');
-              return res.json();
-            })
-            .then(function(json) {
-              window.open('https://docs.google.com/document/create?url=' + encodeURIComponent(json.url), '_blank');
-              addToast(docLabels[type] + ' opened in Google Docs', 'success');
-            })
-            .catch(function() {
-              saveAs(result.blob, result.filename);
-              window.open(GOOGLE_DRIVE_FOLDER, '_blank');
-              addToast('File downloaded. Your Google Drive folder is now open \u2014 drag the downloaded file into it, then right-click > "Open with" > Google Docs.', 'info');
-            });
+          // Download the file locally
+          saveAs(result.blob, result.filename);
+          // Open the Google Drive folder so user can drag the file in
+          window.open(GOOGLE_DRIVE_FOLDER, '_blank');
+          addToast(docLabels[type] + ' downloaded! Drag it into the Google Drive folder that just opened, then double-click to open as Google Doc.', 'success');
         }).catch(function(e) {
           addToast('Failed to generate document', 'error');
           console.error(e);
@@ -683,7 +671,7 @@
                       </button>
                       <button onClick={function() { handleOpenInDocs(type); }} disabled={!!generating} className="inline-flex items-center rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 transition-colors disabled:opacity-50">
                         <svg className="w-3.5 h-3.5 mr-1" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6zm4 18H6V4h7v5h5v11zM8 13h8v2H8v-2zm0 4h8v2H8v-2zm0-8h3v2H8V9z"/></svg>
-                        Save to Google Drive
+                        Upload to Google Drive
                       </button>
                     </div>
                   </div>
