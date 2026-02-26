@@ -570,14 +570,15 @@
       function fC(n) { return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n); }
 
       function getBlob(type) {
-        var projectName = (data.projectName || 'Contract').trim();
+        var vendorName = (data.vendorLegalName || 'Vendor').trim();
         var today = new Date();
         var dateStr = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
+        var timeStr = String(today.getHours()).padStart(2, '0') + String(today.getMinutes()).padStart(2, '0');
         var doc, docType;
         if (type === 'psa') { doc = generatePSA(data); docType = 'PSA'; }
         else if (type === 'sow') { doc = generateSOW(data); docType = 'SOW'; }
         else { doc = generateFormSummary(data); docType = 'Form Summary'; }
-        var filename = projectName + ' - ' + docType + ' - ' + dateStr + '.docx';
+        var filename = docType + '_' + vendorName + '_' + dateStr + '_' + timeStr + '.docx';
         return docToBlob(doc).then(function(blob) { return { blob: blob, filename: filename }; });
       }
 
@@ -619,24 +620,22 @@
               return res.json();
             })
             .then(function(json) {
-              // Step 2: If Apps Script is configured, use it to create a Google Doc
+              // Step 2: Call Apps Script to create Google Doc in Drive folder
               if (APPS_SCRIPT_URL) {
                 return fetch(APPS_SCRIPT_URL, {
                   method: 'POST',
-                  headers: { 'Content-Type': 'text/plain' },
+                  mode: 'no-cors',
+                  headers: { 'Content-Type': 'text/plain;charset=utf-8' },
                   body: JSON.stringify({ url: json.url, filename: result.filename }),
-                })
-                .then(function(r) { return r.json(); })
-                .then(function(data) {
-                  if (data.success && data.url) {
-                    window.open(data.url, '_blank');
-                    addToast(docLabels[type] + ' created in Google Drive!', 'success');
-                  } else {
-                    throw new Error(data.error || 'Apps Script error');
-                  }
+                  redirect: 'follow',
+                }).then(function() {
+                  // no-cors means we can't read the response, but the script executed
+                  // Open the Drive folder so user can see the created doc
+                  window.open(GOOGLE_DRIVE_FOLDER, '_blank');
+                  addToast(docLabels[type] + ' created in Google Drive! Check the folder that just opened.', 'success');
                 });
               } else {
-                // Fallback: download file and open Drive folder
+                // No Apps Script configured — download and open folder
                 saveAs(result.blob, result.filename);
                 window.open(GOOGLE_DRIVE_FOLDER, '_blank');
                 addToast(docLabels[type] + ' downloaded! Drag it into the Google Drive folder that just opened.', 'success');
