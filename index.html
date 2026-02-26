@@ -324,6 +324,9 @@
     // Cloudflare Worker URL — update this after deploying
     var FILE_SERVER_URL = 'https://contract-drafter-files.ikosoy.workers.dev';
 
+    // Google Apps Script Web App URL — update after deploying the script
+    var APPS_SCRIPT_URL = '';
+
     var GOOGLE_DRIVE_FOLDER = 'https://drive.google.com/drive/folders/1dcmur1QVcbaPAR0CneVo6DlaA6bq_M6Y';
     var INP = "w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm text-gray-800 placeholder:text-gray-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 focus:outline-none transition-colors";
 
@@ -354,11 +357,22 @@
     }
 
     function Sidebar({ activeSection, onSectionClick, isSectionComplete }) {
+      var completedCount = sections.filter(function(s) { return isSectionComplete(s.id); }).length;
+      var progressPct = Math.round((completedCount / sections.length) * 100);
       return (
         <aside className="w-72 bg-white border-r border-gray-200 min-h-screen flex flex-col flex-shrink-0">
           <div className="px-6 py-6 border-b border-gray-200">
             <h1 className="text-xl font-semibold text-gray-900">Contract Drafter</h1>
             <p className="text-xs text-gray-500 mt-1">Professional Services Contracts</p>
+            <div className="mt-4">
+              <div className="flex justify-between text-xs text-gray-500 mb-1.5">
+                <span>Progress</span>
+                <span>{completedCount} of {sections.length} steps</span>
+              </div>
+              <div className="w-full bg-gray-100 rounded-full h-1.5">
+                <div className="bg-blue-600 h-1.5 rounded-full transition-all duration-300" style={{ width: progressPct + '%' }}></div>
+              </div>
+            </div>
           </div>
           <nav className="flex-1 py-4">
             {sections.map(function(s, i) {
@@ -395,7 +409,7 @@
       );
     }
 
-    function VendorSection({ data, onChange, onNext }) {
+    function VendorSection({ data, onChange, onNext, onReset }) {
       var complete = !!(data.vendorLegalName.trim() && data.vendorAddress.trim() && data.vendorContactName.trim() && data.vendorEmail.trim());
       return (
         <div>
@@ -417,14 +431,15 @@
               </Field>
             </div>
           </div>
-          <div className="mt-8 flex justify-end">
+          <div className="mt-8 flex justify-between items-center">
+            <button onClick={onReset} className="text-sm text-red-500 hover:text-red-700">Reset Form</button>
             <button onClick={onNext} disabled={!complete} className={"inline-flex items-center justify-center rounded-lg px-5 py-2.5 text-sm font-medium transition-colors " + (complete ? "bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800" : "bg-gray-200 text-gray-400 cursor-not-allowed")}>Next: Project Details</button>
           </div>
         </div>
       );
     }
 
-    function ProjectSection({ data, onChange, onNext, onPrev }) {
+    function ProjectSection({ data, onChange, onNext, onPrev, onReset }) {
       var complete = !!(data.projectName.trim() && data.projectDescription.trim() && data.startDate && data.endDate && data.totalValue > 0);
       return (
         <div>
@@ -448,15 +463,18 @@
               </div>
             </Field>
           </div>
-          <div className="mt-8 flex justify-between">
-            <button onClick={onPrev} className="inline-flex items-center rounded-lg border border-gray-300 bg-white px-5 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">Back</button>
+          <div className="mt-8 flex justify-between items-center">
+            <div className="flex items-center gap-4">
+              <button onClick={onPrev} className="inline-flex items-center rounded-lg border border-gray-300 bg-white px-5 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">Back</button>
+              <button onClick={onReset} className="text-sm text-red-500 hover:text-red-700">Reset Form</button>
+            </div>
             <button onClick={onNext} disabled={!complete} className={"inline-flex items-center rounded-lg px-5 py-2.5 text-sm font-medium transition-colors " + (complete ? "bg-blue-600 text-white hover:bg-blue-700" : "bg-gray-200 text-gray-400 cursor-not-allowed")}>Next: Statement of Work</button>
           </div>
         </div>
       );
     }
 
-    function SOWSection({ data, onChange, onNext, onPrev }) {
+    function SOWSection({ data, onChange, onNext, onPrev, onReset }) {
       function addD() { onChange(function(p) { return Object.assign({}, p, { deliverables: p.deliverables.concat([{ id: uuid(), name: '', description: '', dueDate: '' }]) }); }); }
       function updD(id, f, v) { onChange(function(p) { return Object.assign({}, p, { deliverables: p.deliverables.map(function(d) { if (d.id === id) { var u = Object.assign({}, d); u[f] = v; return u; } return d; }) }); }); }
       function rmD(id) { onChange(function(p) { return Object.assign({}, p, { deliverables: p.deliverables.filter(function(d) { return d.id !== id; }), paymentMilestones: p.paymentMilestones.filter(function(m) { return m.deliverableId !== id; }) }); }); }
@@ -533,8 +551,11 @@
             <textarea value={data.acceptanceCriteria} onChange={function(e) { onChange({ acceptanceCriteria: e.target.value }); }} placeholder="Define the criteria for accepting deliverables..." rows={5} className={INP + " resize-none"} />
           </div>
 
-          <div className="mt-8 flex justify-between">
-            <button onClick={onPrev} className="inline-flex items-center rounded-lg border border-gray-300 bg-white px-5 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">Back</button>
+          <div className="mt-8 flex justify-between items-center">
+            <div className="flex items-center gap-4">
+              <button onClick={onPrev} className="inline-flex items-center rounded-lg border border-gray-300 bg-white px-5 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">Back</button>
+              <button onClick={onReset} className="text-sm text-red-500 hover:text-red-700">Reset Form</button>
+            </div>
             <button onClick={onNext} disabled={!(data.deliverables.length > 0 && data.acceptanceCriteria.trim().length > 0)} className={"inline-flex items-center rounded-lg px-5 py-2.5 text-sm font-medium transition-colors " + (data.deliverables.length > 0 && data.acceptanceCriteria.trim().length > 0 ? "bg-blue-600 text-white hover:bg-blue-700" : "bg-gray-200 text-gray-400 cursor-not-allowed")}>Next: Review &amp; Generate</button>
           </div>
         </div>
@@ -587,12 +608,46 @@
 
       function handleOpenInDocs(type) {
         setGenerating(type);
+        addToast('Uploading to Google Drive...', 'info');
         getBlob(type).then(function(result) {
-          // Download the file locally
-          saveAs(result.blob, result.filename);
-          // Open the Google Drive folder so user can drag the file in
-          window.open(GOOGLE_DRIVE_FOLDER, '_blank');
-          addToast(docLabels[type] + ' downloaded! Drag it into the Google Drive folder that just opened, then double-click to open as Google Doc.', 'success');
+          // Step 1: Upload .docx to Cloudflare Worker for a public URL
+          var fd = new FormData();
+          fd.append('file', result.blob, result.filename);
+          return fetch(FILE_SERVER_URL + '/upload', { method: 'POST', body: fd })
+            .then(function(res) {
+              if (!res.ok) throw new Error('Upload server unavailable');
+              return res.json();
+            })
+            .then(function(json) {
+              // Step 2: If Apps Script is configured, use it to create a Google Doc
+              if (APPS_SCRIPT_URL) {
+                return fetch(APPS_SCRIPT_URL, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'text/plain' },
+                  body: JSON.stringify({ url: json.url, filename: result.filename }),
+                })
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                  if (data.success && data.url) {
+                    window.open(data.url, '_blank');
+                    addToast(docLabels[type] + ' created in Google Drive!', 'success');
+                  } else {
+                    throw new Error(data.error || 'Apps Script error');
+                  }
+                });
+              } else {
+                // Fallback: download file and open Drive folder
+                saveAs(result.blob, result.filename);
+                window.open(GOOGLE_DRIVE_FOLDER, '_blank');
+                addToast(docLabels[type] + ' downloaded! Drag it into the Google Drive folder that just opened.', 'success');
+              }
+            })
+            .catch(function(err) {
+              console.error(err);
+              saveAs(result.blob, result.filename);
+              window.open(GOOGLE_DRIVE_FOLDER, '_blank');
+              addToast(docLabels[type] + ' downloaded! Drag it into the Google Drive folder that just opened.', 'info');
+            });
         }).catch(function(e) {
           addToast('Failed to generate document', 'error');
           console.error(e);
@@ -707,9 +762,9 @@
 
       function renderSection() {
         switch (form.activeSection) {
-          case 'vendor':  return <VendorSection data={form.formData} onChange={form.setFormData} onNext={form.goToNext} />;
-          case 'project': return <ProjectSection data={form.formData} onChange={form.setFormData} onNext={form.goToNext} onPrev={form.goToPrev} />;
-          case 'sow':     return <SOWSection data={form.formData} onChange={form.setFormData} onNext={form.goToNext} onPrev={form.goToPrev} />;
+          case 'vendor':  return <VendorSection data={form.formData} onChange={form.setFormData} onNext={form.goToNext} onReset={form.resetForm} />;
+          case 'project': return <ProjectSection data={form.formData} onChange={form.setFormData} onNext={form.goToNext} onPrev={form.goToPrev} onReset={form.resetForm} />;
+          case 'sow':     return <SOWSection data={form.formData} onChange={form.setFormData} onNext={form.goToNext} onPrev={form.goToPrev} onReset={form.resetForm} />;
           case 'review':  return <ReviewSection data={form.formData} onChange={form.setFormData} onPrev={form.goToPrev} onReset={form.resetForm} addToast={toast.addToast} />;
           default: return null;
         }
