@@ -64,6 +64,16 @@
     }
 
     // ─── Hooks ───
+    function checkSectionComplete(d, s) {
+      switch (s) {
+        case 'vendor':  return !!(d.vendorLegalName.trim() && d.vendorAddress.trim() && d.vendorContactName.trim() && d.vendorEmail.trim());
+        case 'project': return !!(d.projectName.trim() && d.projectDescription.trim() && d.startDate && d.endDate && d.totalValue > 0);
+        case 'sow':     return d.deliverables.length > 0 && d.acceptanceCriteria.trim().length > 0;
+        case 'review':  return false;
+        default: return false;
+      }
+    }
+
     function useContractForm() {
       const [formData, setFormDataState] = useState(function() {
         try {
@@ -73,11 +83,28 @@
         return Object.assign({}, defaultFormData);
       });
       const [activeSection, setActiveSectionState] = useState(function() {
+        var savedData;
         try {
-          var r = localStorage.getItem('cd-section');
-          if (r && sections.some(function(s) { return s.id === r; })) return r;
+          var r = localStorage.getItem('cd-form');
+          if (r) savedData = Object.assign({}, defaultFormData, JSON.parse(r));
         } catch(e) { /* ignore */ }
-        return 'vendor';
+        savedData = savedData || Object.assign({}, defaultFormData);
+
+        var savedSection = null;
+        try {
+          var s = localStorage.getItem('cd-section');
+          if (s && sections.some(function(sec) { return sec.id === s; })) savedSection = s;
+        } catch(e) { /* ignore */ }
+        if (!savedSection) return 'vendor';
+
+        // Validate that all sections before the saved one are complete
+        var targetIdx = sections.findIndex(function(sec) { return sec.id === savedSection; });
+        for (var i = 0; i < targetIdx; i++) {
+          if (!checkSectionComplete(savedData, sections[i].id)) {
+            return sections[i].id; // Go back to the first incomplete section
+          }
+        }
+        return savedSection;
       });
 
       useEffect(function() { localStorage.setItem('cd-form', JSON.stringify(formData)); }, [formData]);
@@ -89,30 +116,31 @@
       }, []);
       const setActiveSection = useCallback(function(s) { setActiveSectionState(s); }, []);
       const isSectionComplete = useCallback(function(s) {
-        var d = formData;
-        switch (s) {
-          case 'vendor':  return !!(d.vendorLegalName.trim() && d.vendorAddress.trim() && d.vendorContactName.trim() && d.vendorEmail.trim());
-          case 'project': return !!(d.projectName.trim() && d.projectDescription.trim() && d.startDate && d.endDate && d.totalValue > 0);
-          case 'sow':     return d.deliverables.length > 0 && d.acceptanceCriteria.trim().length > 0;
-          case 'review':  return false;
-          default: return false;
-        }
+        return checkSectionComplete(formData, s);
       }, [formData]);
       const goToNext = useCallback(function() {
         var i = sections.findIndex(function(s) { return s.id === activeSection; });
-        if (i < sections.length - 1) setActiveSectionState(sections[i + 1].id);
-      }, [activeSection]);
+        if (i < sections.length - 1 && isSectionComplete(activeSection)) setActiveSectionState(sections[i + 1].id);
+      }, [activeSection, isSectionComplete]);
       const goToPrev = useCallback(function() {
         var i = sections.findIndex(function(s) { return s.id === activeSection; });
         if (i > 0) setActiveSectionState(sections[i - 1].id);
       }, [activeSection]);
+      const goToSection = useCallback(function(targetId) {
+        var targetIdx = sections.findIndex(function(s) { return s.id === targetId; });
+        // Allow going back to any previous section, or forward only if all prior sections are complete
+        for (var i = 0; i < targetIdx; i++) {
+          if (!isSectionComplete(sections[i].id)) return;
+        }
+        setActiveSectionState(targetId);
+      }, [isSectionComplete]);
       const resetForm = useCallback(function() {
         setFormDataState(Object.assign({}, defaultFormData));
         setActiveSectionState('vendor');
         localStorage.removeItem('cd-form');
         localStorage.removeItem('cd-section');
       }, []);
-      return { formData: formData, setFormData: setFormData, activeSection: activeSection, setActiveSection: setActiveSection, isSectionComplete: isSectionComplete, goToNext: goToNext, goToPrev: goToPrev, resetForm: resetForm };
+      return { formData: formData, setFormData: setFormData, activeSection: activeSection, setActiveSection: goToSection, isSectionComplete: isSectionComplete, goToNext: goToNext, goToPrev: goToPrev, resetForm: resetForm };
     }
 
     function useToast() {
