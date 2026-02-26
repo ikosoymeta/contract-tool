@@ -607,6 +607,23 @@
           .finally(function() { setGenerating(null); });
       }
 
+      function callAppsScript(fileUrl, filename) {
+        // Google Apps Script web apps require form submission or JSONP to work cross-origin.
+        // We use a hidden form POST that opens the result in a new window.
+        var form = document.createElement('form');
+        form.method = 'POST';
+        form.action = APPS_SCRIPT_URL;
+        form.target = '_blank';
+        var input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = 'payload';
+        input.value = JSON.stringify({ url: fileUrl, filename: filename });
+        form.appendChild(input);
+        document.body.appendChild(form);
+        form.submit();
+        document.body.removeChild(form);
+      }
+
       function handleOpenInDocs(type) {
         setGenerating(type);
         addToast('Uploading to Google Drive...', 'info');
@@ -620,32 +637,21 @@
               return res.json();
             })
             .then(function(json) {
-              // Step 2: Call Apps Script to create Google Doc in Drive folder
               if (APPS_SCRIPT_URL) {
-                return fetch(APPS_SCRIPT_URL, {
-                  method: 'POST',
-                  mode: 'no-cors',
-                  headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                  body: JSON.stringify({ url: json.url, filename: result.filename }),
-                  redirect: 'follow',
-                }).then(function() {
-                  // no-cors means we can't read the response, but the script executed
-                  // Open the Drive folder so user can see the created doc
-                  window.open(GOOGLE_DRIVE_FOLDER, '_blank');
-                  addToast(docLabels[type] + ' created in Google Drive! Check the folder that just opened.', 'success');
-                });
+                // Step 2: Call Apps Script via form POST — it will create the Google Doc
+                callAppsScript(json.url, result.filename);
+                addToast(docLabels[type] + ' is being created in Google Drive...', 'success');
               } else {
-                // No Apps Script configured — download and open folder
                 saveAs(result.blob, result.filename);
                 window.open(GOOGLE_DRIVE_FOLDER, '_blank');
-                addToast(docLabels[type] + ' downloaded! Drag it into the Google Drive folder that just opened.', 'success');
+                addToast(docLabels[type] + ' downloaded! Drag it into the Google Drive folder.', 'success');
               }
             })
             .catch(function(err) {
               console.error(err);
               saveAs(result.blob, result.filename);
               window.open(GOOGLE_DRIVE_FOLDER, '_blank');
-              addToast(docLabels[type] + ' downloaded! Drag it into the Google Drive folder that just opened.', 'info');
+              addToast(docLabels[type] + ' downloaded! Drag it into the Google Drive folder.', 'info');
             });
         }).catch(function(e) {
           addToast('Failed to generate document', 'error');
